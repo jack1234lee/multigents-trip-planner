@@ -13,7 +13,9 @@ MCP tools, so the model still decides whether and how to call tools.
 from __future__ import annotations
 
 import asyncio
+import json
 import operator
+import re
 from datetime import datetime, timedelta
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
@@ -44,13 +46,17 @@ HOTEL_AGENT_PROMPT = """你是酒店推荐专家。你的任务是根据城市�
 PLANNER_SYSTEM_PROMPT = """你是行程规划专家。请根据用户需求、景点信息、天气信息和酒店信息生成旅行计划。
 
 要求:
-1. 输出必须满足 TripPlan 结构。
-2. weather_info 数组应尽量包含每一天的天气信息。
-3. 每天安排 2-3 个景点，并考虑景点之间距离和游览时间。
-4. 每天必须包含早餐、午餐、晚餐。
-5. 每天推荐一个具体酒店；如果工具结果不足，可以明确标注为基于偏好的建议。
-6. 景点经纬度优先使用工具结果；若缺失，给出合理占位并在 overall_suggestions 中说明。
-7. 必须包含预算信息，包括门票、酒店、餐饮、交通和总费用。"""
+1. 只输出一个 JSON 对象，不要输出 Markdown，不要使用 ```json 代码块。
+2. JSON 顶层必须直接包含 city、start_date、end_date、days、weather_info、overall_suggestions、budget。
+3. 不要在外层包 trip_plan、result、data 等字段。
+4. days 必须是数组，长度必须等于用户请求天数。
+5. weather_info 数组应尽量包含每一天的天气信息。
+6. 每天安排 2-3 个景点，并考虑景点之间距离和游览时间。
+7. 每天必须包含早餐、午餐、晚餐。
+8. overall_suggestions 必须是字符串，不要输出数组。
+9. 每天推荐一个具体酒店；如果工具结果不足，可以明确标注为基于偏好的建议。
+10. 景点经纬度优先使用工具结果；若缺失，给出合理占位并在 overall_suggestions 中说明。
+11. 必须包含预算信息，包括门票、酒店、餐饮、交通和总费用。"""
 
 
 class TripPlannerState(TypedDict, total=False):
@@ -280,17 +286,15 @@ class LangGraphTripPlanner:
         )
 
         try:
-            structured_llm = self.llm.with_structured_output(TripPlan)
-            plan = await structured_llm.ainvoke(
+            response = await self.llm.ainvoke(
                 [
                     SystemMessage(content=PLANNER_SYSTEM_PROMPT),
                     HumanMessage(content=prompt),
                 ]
             )
-            if isinstance(plan, TripPlan):
-                print("📋 行程规划节点完成: 已生成 TripPlan")
-                return {"final_plan": plan}
-            return {"errors": [f"结构化输出类型异常: {type(plan).__name__}"]}
+            plan = self._parse_trip_plan_response(_message_text(response), request)
+            print("📋 行程规划节点完成: 已生成 TripPlan")
+            return {"final_plan": plan}
         except Exception as exc:
             message = f"行程规划失败: {exc}"
             print(f"❌ {message}")
@@ -365,7 +369,168 @@ class LangGraphTripPlanner:
             query += f"\n额外要求: {request.free_text_input}\n"
         if errors:
             query += "\n上游节点问题:\n" + "\n".join(f"- {error}" for error in errors)
+        query += """
+
+必须输出以下形状的 JSON，字段名不要改变:
+{
+  "city": "南京",
+  "start_date": "2026-06-06",
+  "end_date": "2026-06-08",
+  "days": [
+    {
+      "date": "2026-06-06",
+      "day_index": 0,
+      "description": "第1天行程概述",
+      "transportation": "公共交通",
+      "accommodation": "经济型酒店",
+      "hotel": {
+        "name": "酒店名称",
+        "address": "酒店地址",
+        "location": {"longitude": 118.7969, "latitude": 32.0603},
+        "price_range": "200-300元",
+        "rating": "4.5",
+        "distance": "距离景点约2公里",
+        "type": "经济型酒店",
+        "estimated_cost": 250
+      },
+      "attractions": [
+        {
+          "name": "景点名称",
+          "address": "景点地址",
+          "location": {"longitude": 118.7969, "latitude": 32.0603},
+          "visit_duration": 120,
+          "description": "景点描述",
+          "category": "景点",
+          "ticket_price": 0
+        }
+      ],
+      "meals": [
+        {"type": "breakfast", "name": "早餐", "description": "早餐建议", "estimated_cost": 20},
+        {"type": "lunch", "name": "午餐", "description": "午餐建议", "estimated_cost": 50},
+        {"type": "dinner", "name": "晚餐", "description": "晚餐建议", "estimated_cost": 80}
+      ]
+    }
+  ],
+  "weather_info": [
+    {
+      "date": "2026-06-06",
+      "day_weather": "多云",
+      "night_weather": "多云",
+      "day_temp": 33,
+      "night_temp": 19,
+      "wind_direction": "东南风",
+      "wind_power": "4级"
+    }
+  ],
+  "overall_suggestions": "总体建议文本",
+  "budget": {
+    "total_attractions": 0,
+    "total_hotels": 500,
+    "total_meals": 300,
+    "total_transportation": 100,
+    "total": 900
+  }
+}
+"""
         return query
+
+    @classmethod
+    def _parse_trip_plan_response(cls, response: str, request: TripRequest) -> TripPlan:
+        data = cls._extract_json_object(response)
+        data = cls._normalize_trip_plan_data(data, request)
+        return TripPlan(**data)
+
+    @staticmethod
+    def _extract_json_object(text: str) -> Dict[str, Any]:
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+
+        try:
+            value = json.loads(cleaned)
+        except json.JSONDecodeError:
+            start = cleaned.find("{")
+            end = cleaned.rfind("}") + 1
+            if start < 0 or end <= start:
+                raise ValueError("模型响应中未找到JSON对象")
+            value = json.loads(cleaned[start:end])
+
+        if not isinstance(value, dict):
+            raise ValueError("模型响应JSON顶层不是对象")
+        return value
+
+    @classmethod
+    def _normalize_trip_plan_data(cls, data: Dict[str, Any], request: TripRequest) -> Dict[str, Any]:
+        for wrapper_key in ("trip_plan", "plan", "result", "data"):
+            wrapped = data.get(wrapper_key)
+            if isinstance(wrapped, dict):
+                data = wrapped
+                break
+
+        data.setdefault("city", request.city)
+        data.setdefault("start_date", request.start_date)
+        data.setdefault("end_date", request.end_date)
+
+        if "days" not in data:
+            for alias in ("daily_plan", "daily_plans", "itinerary", "daily_itinerary", "schedule"):
+                if isinstance(data.get(alias), list):
+                    data["days"] = data[alias]
+                    break
+
+        if isinstance(data.get("overall_suggestions"), list):
+            data["overall_suggestions"] = "\n".join(str(item) for item in data["overall_suggestions"])
+        elif isinstance(data.get("overall_suggestions"), dict):
+            data["overall_suggestions"] = json.dumps(data["overall_suggestions"], ensure_ascii=False)
+        else:
+            data.setdefault("overall_suggestions", "建议提前确认景点开放时间、天气和交通信息。")
+
+        if isinstance(data.get("weather_info"), dict):
+            data["weather_info"] = [data["weather_info"]]
+        data.setdefault("weather_info", [])
+
+        days = data.get("days")
+        if not isinstance(days, list):
+            raise ValueError("模型输出缺少days数组")
+
+        normalized_days = []
+        for index, day in enumerate(days):
+            if not isinstance(day, dict):
+                continue
+            normalized_days.append(cls._normalize_day(day, index, request))
+        data["days"] = normalized_days
+
+        budget = data.get("budget")
+        if isinstance(budget, dict):
+            for key in ("total_attractions", "total_hotels", "total_meals", "total_transportation", "total"):
+                budget.setdefault(key, 0)
+
+        return data
+
+    @staticmethod
+    def _normalize_day(day: Dict[str, Any], index: int, request: TripRequest) -> Dict[str, Any]:
+        date_value = day.get("date")
+        if not date_value:
+            start_date = datetime.strptime(request.start_date, "%Y-%m-%d")
+            date_value = (start_date + timedelta(days=index)).strftime("%Y-%m-%d")
+
+        day.setdefault("date", date_value)
+        day.setdefault("day_index", index)
+        day.setdefault("description", f"第{index + 1}天行程")
+        day.setdefault("transportation", request.transportation)
+        day.setdefault("accommodation", request.accommodation)
+
+        attractions = day.get("attractions")
+        if attractions is None:
+            attractions = day.get("spots") or day.get("pois") or day.get("places") or []
+        day["attractions"] = attractions if isinstance(attractions, list) else []
+
+        meals = day.get("meals")
+        if meals is None:
+            meals = day.get("dining") or day.get("food") or []
+        day["meals"] = meals if isinstance(meals, list) else []
+
+        return day
 
     @staticmethod
     def _create_fallback_plan(request: TripRequest) -> TripPlan:

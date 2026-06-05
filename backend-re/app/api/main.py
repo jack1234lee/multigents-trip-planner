@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..config import get_settings, print_config, validate_config
-from .routes import trip
+from .routes import poi, trip
 
 
 settings = get_settings()
@@ -26,6 +26,7 @@ app.add_middleware(
 )
 
 app.include_router(trip.router, prefix="/api")
+app.include_router(poi.router, prefix="/api")
 
 
 @app.on_event("startup")
