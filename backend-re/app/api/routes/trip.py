@@ -1,5 +1,7 @@
 """Trip planning routes for the LangGraph backend."""
 
+from time import perf_counter
+
 from fastapi import APIRouter, HTTPException
 
 from ...agents.trip_planner_graph import get_trip_planner_agent
@@ -16,6 +18,7 @@ router = APIRouter(prefix="/trip", tags=["旅行规划"])
     description="基于 LangChain/LangGraph 多智能体生成详细旅行计划",
 )
 async def plan_trip(request: TripRequest):
+    started_at = perf_counter()
     try:
         print("\n" + "=" * 60)
         print("📥 收到旅行规划请求:")
@@ -26,14 +29,18 @@ async def plan_trip(request: TripRequest):
 
         planner = get_trip_planner_agent()
         trip_plan = await planner.aplan_trip(request)
+        elapsed_ms = int((perf_counter() - started_at) * 1000)
+        print(f"⏱️ 行程生成耗时: {elapsed_ms}ms")
 
         return TripPlanResponse(
             success=True,
             message="旅行计划生成成功",
             data=trip_plan,
+            elapsed_ms=elapsed_ms,
         )
     except Exception as exc:
-        print(f"❌ 生成旅行计划失败: {exc}")
+        elapsed_ms = int((perf_counter() - started_at) * 1000)
+        print(f"❌ 生成旅行计划失败: {exc}，耗时: {elapsed_ms}ms")
         raise HTTPException(status_code=500, detail=f"生成旅行计划失败: {exc}") from exc
 
 

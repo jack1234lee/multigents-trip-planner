@@ -211,12 +211,17 @@ import { generateTripPlan } from '@/services/api'
 import type { TripFormData } from '@/types'
 import type { Dayjs } from 'dayjs'
 
+interface TripFormState extends Omit<TripFormData, 'start_date' | 'end_date'> {
+  start_date: Dayjs | null
+  end_date: Dayjs | null
+}
+
 const router = useRouter()
 const loading = ref(false)
 const loadingProgress = ref(0)
 const loadingStatus = ref('')
 
-const formData = reactive<TripFormData & { start_date: Dayjs | null; end_date: Dayjs | null }>({
+const formData = reactive<TripFormState>({
   city: '',
   start_date: null,
   end_date: null,
@@ -292,6 +297,9 @@ const handleSubmit = async () => {
     if (response.success && response.data) {
       // 保存到sessionStorage
       sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
+      if (response.elapsed_ms !== undefined) {
+        sessionStorage.setItem('tripPlanElapsedMs', String(response.elapsed_ms))
+      }
 
       message.success('旅行计划生成成功!')
 
@@ -646,4 +654,3 @@ const handleSubmit = async () => {
   }
 }
 </style>
-

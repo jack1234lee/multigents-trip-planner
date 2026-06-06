@@ -91,5 +91,5 @@ export interface TripPlanResponse {
   success: boolean
   message: string
   data?: TripPlan
+  elapsed_ms?: number
 }
-

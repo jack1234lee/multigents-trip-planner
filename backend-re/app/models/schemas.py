@@ -144,6 +144,7 @@ class TripPlanResponse(BaseModel):
     success: bool
     message: str = ""
     data: Optional[TripPlan] = None
+    elapsed_ms: Optional[int] = Field(default=None, description="服务端生成行程耗时，单位毫秒")
 
 
 class ErrorResponse(BaseModel):

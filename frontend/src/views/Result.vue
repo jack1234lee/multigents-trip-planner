@@ -74,6 +74,10 @@
                   <span class="info-label">📅 日期:</span>
                   <span class="info-value">{{ tripPlan.start_date }} 至 {{ tripPlan.end_date }}</span>
                 </div>
+                <div v-if="elapsedMs !== null" class="info-item">
+                  <span class="info-label">⏱️ 生成耗时:</span>
+                  <span class="info-value">{{ (elapsedMs / 1000).toFixed(1) }} 秒</span>
+                </div>
                 <div class="info-item">
                   <span class="info-label">💡 建议:</span>
                   <span class="info-value">{{ tripPlan.overall_suggestions }}</span>
@@ -319,6 +323,7 @@ import type { TripPlan } from '@/types'
 
 const router = useRouter()
 const tripPlan = ref<TripPlan | null>(null)
+const elapsedMs = ref<number | null>(null)
 const editMode = ref(false)
 const originalPlan = ref<TripPlan | null>(null)
 const attractionPhotos = ref<Record<string, string>>({})
@@ -328,6 +333,10 @@ let map: any = null
 
 onMounted(async () => {
   const data = sessionStorage.getItem('tripPlan')
+  const elapsed = sessionStorage.getItem('tripPlanElapsedMs')
+  if (elapsed) {
+    elapsedMs.value = Number(elapsed)
+  }
   if (data) {
     tripPlan.value = JSON.parse(data)
     // 加载景点图片
@@ -783,49 +792,6 @@ const exportAsPDF = async () => {
   } catch (error: any) {
     console.error('导出PDF失败:', error)
     message.error({ content: `导出PDF失败: ${error.message}`, key: 'export' })
-  }
-}
-
-// 截取地图图片
-const captureMapImage = async () => {
-  if (!map) return
-
-  try {
-    // 获取地图容器
-    const mapContainer = document.getElementById('amap-container')
-    if (!mapContainer) return
-
-    // 使用高德地图的截图功能
-    const mapCanvas = mapContainer.querySelector('canvas')
-    if (mapCanvas) {
-      // 创建一个img元素替换地图容器
-      const img = document.createElement('img')
-      img.src = mapCanvas.toDataURL('image/png')
-      img.style.width = '100%'
-      img.style.height = '500px'
-      img.style.objectFit = 'cover'
-      img.id = 'map-snapshot'
-
-      // 隐藏原地图,显示截图
-      mapContainer.style.display = 'none'
-      mapContainer.parentElement?.appendChild(img)
-    }
-  } catch (error) {
-    console.error('截取地图失败:', error)
-  }
-}
-
-// 恢复地图
-const restoreMap = () => {
-  const mapContainer = document.getElementById('amap-container')
-  const snapshot = document.getElementById('map-snapshot')
-
-  if (mapContainer) {
-    mapContainer.style.display = 'block'
-  }
-
-  if (snapshot) {
-    snapshot.remove()
   }
 }
 
@@ -1431,4 +1397,3 @@ const drawRoutes = (AMap: any, attractions: any[]) => {
   }
 }
 </style>
-
